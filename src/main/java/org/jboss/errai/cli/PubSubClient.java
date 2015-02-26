@@ -1,12 +1,21 @@
 /* jboss.org */
 package org.jboss.errai.cli;
 
-import javax.jms.*;
+import javax.jms.CompletionListener;
+import javax.jms.ConnectionFactory;
+import javax.jms.JMSConsumer;
+import javax.jms.JMSContext;
+import javax.jms.JMSException;
+import javax.jms.JMSProducer;
+import javax.jms.Message;
+import javax.jms.Session;
+import javax.jms.TextMessage;
+import javax.jms.Topic;
+import javax.jms.TopicConnection;
+import javax.naming.Context;
 import javax.naming.InitialContext;
 import javax.naming.NamingException;
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
+
 import java.util.Properties;
 
 /**
@@ -16,115 +25,94 @@ import java.util.Properties;
  * @date: Apr 16, 2010
  */
 public class PubSubClient {
-    TopicConnection conn = null;
-    TopicSession session = null;
-    Topic outboundTopic = null;
-    Topic inboundTopic = null;
-    private static final String JNDI_HOST = "jnp://localhost:1099";
-    private static final String INBOUND_TOPIC = "topic/inboundTopic";
-    private static final String OUTBOUND_TOPIC = "topic/outboundTopic";
+  TopicConnection conn = null;
+  ConnectionFactory connectionFactory = null;
+  JMSContext context = null;
 
-    public static class ExListener implements MessageListener {
-        public void onMessage(Message msg) {
-            MapMessage tm = (MapMessage) msg;
-            try {
-                tm.acknowledge();
-            }
-            catch (JMSException e) {
-                System.err.println("ERR: " + e.getMessage());
-            }
-            try {
-                System.out.println("");
-                System.out.println("< " + tm.getString("text"));
-                System.out.print("> ");
-            } catch (Throwable t) {
-                t.printStackTrace();
-            }
-        }
-    }
+  private static final String JNDI_HOST = "http-remoting://127.0.0.1:8080"; // =http-remoting://localhost:8080
+  private static final String INBOUND_TOPIC = "jms/topic/inboundTopic";
+  private static final String OUTBOUND_TOPIC = "jms/topic/outboundTopic";
+  private static final String DEFAULT_USERNAME = "quickstartUser";
+  private static final String DEFAULT_PASSWORD = "quickstartPwd1!";
+  private static final String DEFAULT_CONNECTION_FACTORY = "jms/RemoteConnectionFactory";
 
-    public void setupPubSub()
-            throws JMSException, NamingException {
-        Properties props = new Properties();
-        props.put("java.naming.provider.url", JNDI_HOST);
-        props.put("java.naming.factory.initial", "org.jnp.interfaces.NamingContextFactory");
-        props.put("java.naming.factory.url.pkgs", "org.jboss.naming:org.jnp.interfaces");
-        InitialContext iniCtx = new InitialContext(props);
+  public void setupPubSub() throws JMSException, NamingException, InterruptedException {
 
-        Object tmp = iniCtx.lookup("ConnectionFactory");
-        TopicConnectionFactory tcf = (TopicConnectionFactory) tmp;
-        conn = tcf.createTopicConnection();
-        outboundTopic = (Topic) iniCtx.lookup(INBOUND_TOPIC);
-        inboundTopic = (Topic) iniCtx.lookup(OUTBOUND_TOPIC);
 
-        session = conn.createTopicSession(false, TopicSession.AUTO_ACKNOWLEDGE);
+    Properties props = new Properties();
+    props.put(Context.PROVIDER_URL, JNDI_HOST);
+    props.put(Context.INITIAL_CONTEXT_FACTORY,"org.jboss.naming.remote.client.InitialContextFactory");
+    props.put(Context.SECURITY_PRINCIPAL, DEFAULT_USERNAME);
+    props.put(Context.SECURITY_CREDENTIALS, DEFAULT_PASSWORD);
+    
+    InitialContext jndiContext = new InitialContext(props);
+    connectionFactory = (ConnectionFactory) jndiContext.lookup(DEFAULT_CONNECTION_FACTORY); //ConnectionFactory
+   // connectionFactory = (ConnectionFactory) jndiContext.lookup("ConnectionFactory");//ConnectionFactory
 
-        conn.start();
-    }
+    
+    Topic topic = (Topic) jndiContext.lookup(INBOUND_TOPIC);
+    context = connectionFactory.createContext(Session.AUTO_ACKNOWLEDGE);
 
-    public void sendRecvAsync()
-            throws JMSException, NamingException {
-
-        greeting();
-
-        // Setup the PubSub connection, session
-        setupPubSub();
-
-        // Create subscription
-        TopicSubscriber recv = session.createSubscriber(inboundTopic);
-        recv.setMessageListener(new ExListener());
-
-        // Create publisher
-        TopicPublisher send = session.createPublisher(outboundTopic);
-
-        while (true) {
-            MapMessage tm = session.createMapMessage();
-            String input = userInput();
-            if (input.equals("exit"))
-                break;
-            tm.setString("text", input);
-            send.publish(tm);
-        }
-
-        send.close();
-        recv.close();
-
-        System.out.println("Connection close");
-    }
-
-    private void greeting() {
-        System.out.println("\n\n\n === JMS Client Demo ===");
-        System.out.println("Connected to: " + JNDI_HOST);
-        System.out.println("Listening on: " + OUTBOUND_TOPIC);
-        System.out.println("Sending to: " + INBOUND_TOPIC);
-        System.out.println("\n\n");
-    }
-
-    public void stop() throws JMSException {
-        conn.stop();
-        session.close();
-        conn.close();
-    }
-
-    private static String userInput() {
-        System.out.print("> ");
-        BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
-
-        String message = null;
+    JMSProducer producer = context.createProducer();
+  
+    /**
+     * On completion
+     */
+    producer.setAsync(new CompletionListener() {
+      @Override
+      public void onCompletion(Message msg) {
+        TextMessage textMsg = (TextMessage) msg;
         try {
-            message = br.readLine();
-        } catch (IOException ioe) {
-            System.out.println("IO error trying to read input");
-            System.exit(1);
+          System.out.println(" sent : " + textMsg.getText());
+        } catch (JMSException e) {
+          e.printStackTrace(System.err);
         }
-        return message;
+      }
+
+      @Override
+      public void onException(Message msg, Exception ex) {
+        ex.printStackTrace();
+      }
+    });
+    
+    producer.send(topic, "hello6");
+    producer.send(topic, "world6");
+    producer.send(topic, "asynchronously6");
+
+    JMSConsumer jMSConsumer = context.createSharedConsumer(topic, "clientId6");
+    Message message = jMSConsumer.receive();
+    while (message != null) {
+      System.out.println("Recive : " + ((TextMessage) message).getText());
+      message = jMSConsumer.receive();
     }
 
-    public static void main(String args[]) throws Exception {
-        System.out.println("Begin TopicSendRecvClient, now=" + System.currentTimeMillis());
-        PubSubClient client = new PubSubClient();
-        client.sendRecvAsync();
-        client.stop();
-        System.exit(0);
-    }
+    Thread.sleep(2000); // Delay before shutdown
+    stop();
+    System.out.println("Done");
+
+
+  }
+
+  public void sendRecvAsync() throws JMSException, NamingException, InterruptedException {
+    greeting();
+    setupPubSub();
+  }
+
+  private void greeting() {
+    System.out.println("\n\n\n === JMS Client Demo ===");
+    System.out.println("Connected to: " + JNDI_HOST);
+    System.out.println("Listening on: " + OUTBOUND_TOPIC);
+    System.out.println("Sending to: " + INBOUND_TOPIC);
+    System.out.println("\n\n");
+  }
+
+  public void stop() throws JMSException {
+    context.close();
+  }
+
+  public static void main(String args[]) throws Exception {
+    PubSubClient client = new PubSubClient();
+    client.sendRecvAsync();
+  }
+
 }
