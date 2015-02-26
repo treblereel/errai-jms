@@ -38,7 +38,6 @@ public class TopicSubscription extends TopicBridge {
 
       topicSubscriber.setMessageListener(new MessageListener() {
         public void onMessage(javax.jms.Message message) {
-          log.info("On outBound message  " + binding.getTopicName());
           // dispatch to server message bus
           if (message instanceof MapMessage) {
             // addressing
